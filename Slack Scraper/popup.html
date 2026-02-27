@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+
+        body {
+            width: 280px;
+            background: #1a1d21;
+            color: #d1d2d3;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+            font-size: 13px;
+        }
+
+        .header {
+            background: linear-gradient(135deg, #4a154b 0%, #611f69 60%, #7c3085 100%);
+            padding: 16px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .logo {
+            width: 32px;
+            height: 32px;
+            background: white;
+            border-radius: 7px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-shrink: 0;
+        }
+
+        .logo svg { width: 20px; height: 20px; }
+
+        .header-text h1 {
+            font-size: 14.5px;
+            font-weight: 700;
+            color: #fff;
+        }
+
+        .header-text p {
+            font-size: 11px;
+            color: rgba(255,255,255,0.6);
+            margin-top: 2px;
+        }
+
+        .body { padding: 16px; }
+
+        .status-card {
+            background: #222529;
+            border: 1px solid #2d3139;
+            border-radius: 9px;
+            padding: 12px 14px;
+            margin-bottom: 14px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            flex-shrink: 0;
+            background: #555;
+        }
+
+        .status-dot.ready  { background: #00c49a; box-shadow: 0 0 6px rgba(0,196,154,0.5); }
+        .status-dot.warn   { background: #ffa032; }
+        .status-dot.error  { background: #e06070; }
+
+        #status-text {
+            font-size: 12.5px;
+            color: #c0c2c5;
+        }
+
+        .btn {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 7px;
+            width: 100%;
+            padding: 10px 14px;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 13px;
+            font-weight: 600;
+            transition: background 0.15s ease, transform 0.1s ease;
+            margin-bottom: 8px;
+        }
+
+        .btn:last-child { margin-bottom: 0; }
+
+        .btn-primary {
+            background: linear-gradient(135deg, #007a5a, #00a884);
+            color: white;
+            box-shadow: 0 2px 8px rgba(0,122,90,0.35);
+        }
+
+        .btn-primary:hover:not(:disabled) {
+            background: linear-gradient(135deg, #009066, #00c49a);
+            transform: translateY(-1px);
+        }
+
+        .btn-secondary {
+            background: #2d3139;
+            border: 1px solid #3d4148;
+            color: #c0c2c5;
+        }
+
+        .btn-secondary:hover:not(:disabled) { background: #383e47; }
+
+        .btn:disabled {
+            background: #2a2d33 !important;
+            color: #555 !important;
+            cursor: not-allowed;
+            transform: none !important;
+            box-shadow: none !important;
+        }
+
+        .divider { height: 1px; background: #2d3139; margin: 12px 0; }
+
+        .hint {
+            font-size: 11px;
+            color: #555;
+            text-align: center;
+            line-height: 1.5;
+        }
+
+        .version {
+            font-size: 10px;
+            color: #444;
+            text-align: center;
+            margin-top: 12px;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <div class="logo">
+            <svg viewBox="0 0 54 54" xmlns="http://www.w3.org/2000/svg">
+                <path fill="#611f69" d="M19.7 0C16 0 13 3 13 6.7A6.7 6.7 0 0 0 19.7 13.4h6.7V6.7C26.4 3 23.4 0 19.7 0zM19.7 18H6.7A6.7 6.7 0 0 0 0 24.7 6.7 6.7 0 0 0 6.7 31.4H40.2A6.7 6.7 0 0 0 46.9 24.7 6.7 6.7 0 0 0 40.2 18z"/>
+            </svg>
+        </div>
+        <div class="header-text">
+            <h1>Slack Scraper</h1>
+            <p>Multi-channel export tool</p>
+        </div>
+    </div>
+
+    <div class="body">
+        <div class="status-card">
+            <div class="status-dot" id="status-dot"></div>
+            <div id="status-text">Checking…</div>
+        </div>
+
+        <button class="btn btn-primary" id="activate-btn" disabled>▶ Open Scraper Panel</button>
+        <button class="btn btn-secondary" id="reload-btn">↺ Reload Page</button>
+
+        <div class="divider"></div>
+        <div class="hint">Navigate to a Slack workspace, then click "Open Scraper Panel".</div>
+        <div class="version">v3.0</div>
+    </div>
+
+    <script src="popup.js"></script>
+</body>
+</html>
