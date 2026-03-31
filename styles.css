@@ -250,6 +250,27 @@
     background: #3a1a1a;
 }
 
+.action-btn.pause {
+    background: #1e2127;
+    border: 1px solid #4a4020;
+    color: #c8a840;
+}
+
+.action-btn.pause:hover:not(:disabled) {
+    background: #2a2810;
+    border-color: #8a7030;
+}
+
+.action-btn.stop {
+    background: transparent;
+    border: 1px solid #5c2525;
+    color: #c06060;
+}
+
+.action-btn.stop:hover:not(:disabled) {
+    background: #3a1a1a;
+}
+
 /* ── ══════ PICKER TABS ══════ ── */
 .picker-tabs {
     display: flex;

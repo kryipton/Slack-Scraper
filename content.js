@@ -33,6 +33,8 @@
     class SlackMessageScraper {
         constructor() {
             this.isScrapingActive = false;
+            this.isPaused = false;
+            this.isStopped = false;
             this.scrapedMessages = [];
             this.ui = null;
             this.currentPage = 1;
@@ -54,9 +56,25 @@
         init() {
             this.createUI();
             this.setupEventListeners();
-            // Pre-load sidebar channels after a short delay (page may still be loading)
-            setTimeout(() => this.refreshSidebarChannels(), 900);
-            console.log('[SlackScraper] v4 initialized');
+            // Automatically wait for Slack's sidebar to load, then fetch channels
+            this.autoLoadChannels();
+        }
+
+        async autoLoadChannels() {
+            const list = document.getElementById('picker-list');
+            if (list) list.innerHTML = '<div class="picker-empty">Waiting for Slack to load…</div>';
+
+            // Poll for up to 15 seconds waiting for at least one channel element to appear in the DOM
+            for (let i = 0; i < 30; i++) {
+                if (document.querySelector('[data-qa-channel-sidebar-channel="true"]')) {
+                    await this.refreshSidebarChannels();
+                    return;
+                }
+                await sleep(500);
+            }
+
+            // Fallback if Slack never loaded or the selector changed
+            if (list) list.innerHTML = '<div class="picker-empty">Could not automatically load channels. Click ↺ to retry.</div>';
         }
 
         /* ══════════════════════════════════════════
@@ -149,9 +167,10 @@
 
                     <!-- ── ACTIONS ─────────────────── -->
                     <div class="btn-row">
-                        <button id="start-scraping" class="action-btn primary">▶ Start Scraping</button>
-                        <button id="test-search" class="action-btn secondary" title="Test search for first channel">⌕ Test</button>
-                        <button id="test-pagination" class="action-btn secondary" title="Test page navigation">⇄</button>
+                        <button id="start-scraping" class="action-btn primary">▶ Start</button>
+                        <button id="pause-scraping" class="action-btn pause" disabled>⏸ Pause</button>
+                        <button id="stop-scraping"  class="action-btn stop"  disabled>■ Stop</button>
+                        <button id="reset-scraping" class="action-btn secondary">↺ Reset</button>
                     </div>
 
                     <!-- Retry warning -->
@@ -277,10 +296,11 @@
                 if (newVal !== e.target.value) e.target.value = newVal;
             });
 
-            // Scraping
+            // Scraping controls
             document.getElementById('start-scraping').addEventListener('click', () => this.startMultiChannelScraping());
-            document.getElementById('test-search').addEventListener('click', () => this.testSearchFunction());
-            document.getElementById('test-pagination').addEventListener('click', () => this.testNavigationFunction());
+            document.getElementById('pause-scraping').addEventListener('click', () => this.togglePause());
+            document.getElementById('stop-scraping').addEventListener('click',  () => this.stopScraping());
+            document.getElementById('reset-scraping').addEventListener('click', () => this.resetScraping());
             this.downloadAllBtn.addEventListener('click', () => this.downloadAllExports());
             this.clearQueueBtn.addEventListener('click', () => this.clearQueue());
         }
@@ -323,23 +343,20 @@
         }
 
         async refreshSidebarChannels() {
-            const empty = document.getElementById('picker-empty');
             const list = document.getElementById('picker-list');
 
             // Show loading state
             if (list) list.innerHTML = '<div class="picker-empty">Expanding sidebar sections…</div>';
 
             // Step 1: expand all collapsed sections so their channels are in the DOM
-            const expanded = await this.expandAllSidebarSections();
+            await this.expandAllSidebarSections();
 
             // Step 2: read all visible channel items
-            const prevCount = this.sidebarChannels.length;
             this.sidebarChannels = this.readSidebarChannels();
 
             if (this.sidebarChannels.length === 0) {
                 if (list) list.innerHTML = '<div class="picker-empty">No channels found. Make sure you are on a Slack workspace page.</div>';
             } else {
-                console.log(`[SlackScraper] Loaded ${this.sidebarChannels.length} channels from sidebar (expanded ${expanded} sections)`);
                 this.renderPickerList();
             }
         }
@@ -495,6 +512,86 @@
         }
 
         /* ══════════════════════════════════════════
+           CONTROLS — pause / stop / reset
+        ══════════════════════════════════════════ */
+
+        /** Update button enabled/label states based on scraping phase */
+        setControlState(phase) {
+            // phase: 'idle' | 'running' | 'paused'
+            const startBtn = document.getElementById('start-scraping');
+            const pauseBtn = document.getElementById('pause-scraping');
+            const stopBtn  = document.getElementById('stop-scraping');
+            const resetBtn = document.getElementById('reset-scraping');
+            if (!startBtn) return;
+
+            if (phase === 'running') {
+                startBtn.disabled = true;
+                pauseBtn.disabled = false;
+                pauseBtn.textContent = '⏸ Pause';
+                stopBtn.disabled  = false;
+                resetBtn.disabled = true;
+            } else if (phase === 'paused') {
+                startBtn.disabled = true;
+                pauseBtn.disabled = false;
+                pauseBtn.textContent = '▶ Resume';
+                stopBtn.disabled  = false;
+                resetBtn.disabled = true;
+            } else {
+                // idle
+                startBtn.disabled = false;
+                pauseBtn.disabled = true;
+                pauseBtn.textContent = '⏸ Pause';
+                stopBtn.disabled  = true;
+                resetBtn.disabled = false;
+            }
+        }
+
+        togglePause() {
+            if (!this.isScrapingActive) return;
+            this.isPaused = !this.isPaused;
+            if (this.isPaused) {
+                this.setControlState('paused');
+                this.updateStatus('Paused — click Resume to continue', 0);
+            } else {
+                this.setControlState('running');
+            }
+        }
+
+        stopScraping() {
+            if (!this.isScrapingActive) return;
+            this.isStopped = true;
+            this.isPaused  = false;
+            this.updateStatus('Stopping…', 0);
+        }
+
+        resetScraping() {
+            // Reset stats and status display to initial state
+            this.updateStatus('Ready — select channels and dates above', 0);
+            this.updateStat('total-message-count', 0);
+            this.updateStat('completed-count', 0);
+            this.updateStat('pages-processed', 0);
+            this.updateStat('expanded-count', 0);
+            document.getElementById('current-page').textContent = '—';
+            document.getElementById('total-pages').textContent  = '—';
+            const pageRow    = document.getElementById('page-info-row');
+            const channelRow = document.getElementById('channel-progress-row');
+            const channelList = document.getElementById('channel-list');
+            if (pageRow)    pageRow.style.display    = 'none';
+            if (channelRow) channelRow.style.display = 'none';
+            if (channelList){ channelList.innerHTML = ''; channelList.style.display = 'none'; }
+            this.showRetryBar(false);
+            this.allChannelResults = [];
+            this.setControlState('idle');
+        }
+
+        /** Suspend execution while paused; resolves immediately if stopped */
+        async waitIfPaused() {
+            while (this.isPaused && !this.isStopped) {
+                await sleep(300);
+            }
+        }
+
+        /* ══════════════════════════════════════════
            DRAG
         ══════════════════════════════════════════ */
         makeDraggable(handle, element) {
@@ -524,11 +621,44 @@
            SEARCH MODAL
         ══════════════════════════════════════════ */
         findSearchModal() {
+            // Strategy 1: dedicated data-qa containers Slack uses for search
+            const directSelectors = [
+                '[data-qa="search_modal"]',
+                '[data-qa="search-modal"]',
+                '.c-search_modal__wrapper',
+                '.c-search__modal',
+                '[aria-label="Search"]',
+            ];
+            for (const sel of directSelectors) {
+                const el = document.querySelector(sel);
+                if (el && !el.hasAttribute('hidden') && el.offsetParent !== null) return el;
+            }
+
+            // Strategy 2: any visible dialog that contains a search input
             for (const dialog of document.querySelectorAll('[role="dialog"]')) {
                 if (dialog.hasAttribute('hidden')) continue;
                 if (dialog.getAttribute('aria-label') === 'Huddle') continue;
                 if (dialog.querySelector('[data-qa="focusable_search_input"], .c-search__input_box, .c-search_modal__wrapper')) return dialog;
             }
+
+            // Strategy 3: the search input itself may be a top-level overlay (not in a dialog)
+            const floatingInput = document.querySelector('[data-qa="focusable_search_input"]');
+            if (floatingInput && floatingInput.offsetParent !== null) {
+                // Walk up to find the panel root (first ancestor that looks like a container)
+                let node = floatingInput;
+                while (node && node !== document.body) {
+                    node = node.parentElement;
+                    if (node && (
+                        node.classList.contains('c-search_modal__wrapper') ||
+                        node.classList.contains('c-search__modal') ||
+                        node.getAttribute('data-qa') === 'search_modal' ||
+                        node.getAttribute('role') === 'dialog'
+                    )) return node;
+                }
+                // Return the floatingInput's closest overlay-like ancestor
+                return floatingInput.closest('[class*="search"]') || floatingInput.parentElement;
+            }
+
             return null;
         }
 
@@ -547,26 +677,61 @@
             return null;
         }
 
-        async openSearchModal() {
-            const existing = this.findSearchModal();
-            if (existing) {
-                document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', keyCode: 27, bubbles: true }));
-                await sleep(600);
+        async closeSearchModal() {
+            if (!this.findSearchModal()) return;
+            document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', keyCode: 27, bubbles: true }));
+            await sleep(300);
+            document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', keyCode: 27, bubbles: true }));
+            // Wait until modal is gone (up to 2 s)
+            for (let i = 0; i < 10; i++) {
+                await sleep(200);
+                if (!this.findSearchModal()) return;
             }
+        }
+
+        async openSearchModal() {
+            // Always start from a clean state — close whatever is open first
+            await this.closeSearchModal();
+
             this.updateStatus('Opening search modal…', 12);
+
+            // Attempt 1: Ctrl+K (most reliable keyboard shortcut)
             document.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', keyCode: 75, ctrlKey: true, bubbles: true }));
-            await sleep(1500);
+            await sleep(2000);
             let modal = this.findSearchModal();
             if (modal) return modal;
 
-            const searchBtn = document.querySelector('[data-qa="top_nav_search"]');
-            if (searchBtn) { searchBtn.click(); await sleep(1800); modal = this.findSearchModal(); if (modal) return modal; }
+            // Attempt 2: click the top-nav search button (various data-qa values Slack has used)
+            const searchBtnSelectors = [
+                '[data-qa="top_nav_search"]',
+                '[data-qa="search-button"]',
+                '[aria-label="Search"]',
+                'button[data-sk="tooltip_parent_label_search"]',
+                '.p-top_nav__search button',
+            ];
+            for (const sel of searchBtnSelectors) {
+                const btn = document.querySelector(sel);
+                if (btn) {
+                    btn.click();
+                    await sleep(2000);
+                    modal = this.findSearchModal();
+                    if (modal) return modal;
+                    break;
+                }
+            }
 
+            // Attempt 3: wait up to 6 s for the input to appear in the DOM
             try {
-                await waitForElement('[data-qa="focusable_search_input"]', 5000);
+                await waitForElement('[data-qa="focusable_search_input"]', 6000);
                 modal = this.findSearchModal();
                 if (modal) return modal;
             } catch (_) { }
+
+            // Attempt 4: try Ctrl+/ (alternate Slack shortcut) then wait
+            document.dispatchEvent(new KeyboardEvent('keydown', { key: '/', keyCode: 191, ctrlKey: true, bubbles: true }));
+            await sleep(2000);
+            modal = this.findSearchModal();
+            if (modal) return modal;
 
             throw new Error('Could not open Slack search modal');
         }
@@ -722,7 +887,7 @@
                     if (newInfo.currentPage === current.currentPage) break;
                 }
                 return false;
-            } catch (e) { console.error('navigateToPage:', e); return false; }
+            } catch (e) { return false; }
         }
 
         async goToNextPage() {
@@ -743,7 +908,7 @@
                     await sleep(300);
                 }
                 return false;
-            } catch (e) { console.error('goToNextPage:', e); return false; }
+            } catch (e) { return false; }
         }
 
         /* ── Expand ───────────────────────────────── */
@@ -809,6 +974,10 @@
 
             let hasMore = true, failures = 0;
             while (hasMore && failures < 3) {
+                // Honour pause/stop between pages
+                await this.waitIfPaused();
+                if (this.isStopped) break;
+
                 const progress = 85 + (pagesProcessed / Math.max(this.totalPages, pagesProcessed + 1)) * 10;
                 this.updateStatus(`Extracting page ${this.currentPage}${this.totalPages > 1 ? '/' + this.totalPages : ''}…`, progress);
                 await sleep(900);
@@ -851,8 +1020,9 @@
             let result = await run(1);
             if (result.messageCount === 0) {
                 this.showRetryBar(true);
-                console.warn(`[SlackScraper] 0 messages for ${channel} — retrying`);
-                await sleep(3000);
+                // Close the modal cleanly before retry so openSearchModal starts fresh
+                await this.closeSearchModal();
+                await sleep(4000);
                 result = await run(2);
                 this.showRetryBar(false);
             }
@@ -865,8 +1035,10 @@
             if (!validation.isValid) { this.updateStatus(`⚠ ${validation.error}`, 0); return; }
 
             this.isScrapingActive = true;
+            this.isPaused  = false;
+            this.isStopped = false;
             this.allChannelResults = [];
-            document.getElementById('start-scraping').disabled = true;
+            this.setControlState('running');
 
             const { channels, startDate, endDate } = validation;
             this.channels = channels;
@@ -876,12 +1048,17 @@
             let totalMessages = 0;
             try {
                 for (let i = 0; i < channels.length; i++) {
+                    // Check for stop between channels
+                    await this.waitIfPaused();
+                    if (this.isStopped) break;
+
                     const channel = channels[i];
                     this.updateChannelList(channel, 'active');
                     this.showActiveChannel(channel, i + 1, channels.length);
                     this.updateStatus(`Channel ${i + 1}/${channels.length}: ${channel}`, 0);
                     try {
                         const result = await this.processSingleChannel(channel, startDate, endDate);
+                        if (this.isStopped) break;
                         this.allChannelResults.push(result);
                         totalMessages += result.messageCount;
                         this.updateStat('completed-count', i + 1);
@@ -889,22 +1066,31 @@
                         this.updateChannelList(channel, 'done', result.messageCount);
                         this.exportSingleChannel(result, startDate, endDate);
                         this.updateStatus(`✓ ${channel} — ${result.messageCount} messages`, 100);
-                        if (i < channels.length - 1) await sleep(2500);
+                        if (i < channels.length - 1) {
+                            await this.closeSearchModal();
+                            await sleep(2500);
+                        }
                     } catch (e) {
-                        console.error(`[SlackScraper] Failed ${channel}:`, e);
                         this.updateStatus(`✗ ${channel}: ${e.message}`, 0);
                         this.updateChannelList(channel, 'error');
+                        await this.closeSearchModal();
+                        await sleep(1500);
                     }
                 }
-                if (this.allChannelResults.length > 1) this.exportAllChannels(startDate, endDate);
-                this.updateStatus(`✓ Done — ${totalMessages} messages across ${this.allChannelResults.length} channel(s)`, 100);
+                if (this.isStopped) {
+                    this.updateStatus(`Stopped — ${totalMessages} messages saved so far`, 0);
+                } else {
+                    if (this.allChannelResults.length > 1) this.exportAllChannels(startDate, endDate);
+                    this.updateStatus(`✓ Done — ${totalMessages} messages across ${this.allChannelResults.length} channel(s)`, 100);
+                }
                 this.showActiveChannel(null);
             } catch (e) {
-                console.error('[SlackScraper] Fatal:', e);
                 this.updateStatus(`✗ Error: ${e.message}`, 0);
             } finally {
                 this.isScrapingActive = false;
-                document.getElementById('start-scraping').disabled = false;
+                this.isPaused  = false;
+                this.isStopped = false;
+                this.setControlState('idle');
             }
         }
 
@@ -1017,25 +1203,7 @@
             if (count !== null) { const c = el.querySelector('.ch-count'); if (c) c.textContent = `${count} msg`; }
         }
 
-        /* ── Test helpers ─────────────────────────── */
-        async testSearchFunction() {
-            const v = this.validateInputs();
-            if (!v.isValid) { this.updateStatus(`⚠ ${v.error}`, 0); return; }
-            try { this.updateStatus('Testing search…', 0); await this.applySearchFilters(this.generateSearchQuery(v.channels[0], v.startDate, v.endDate)); this.updateStatus('✓ Search test passed', 100); }
-            catch (e) { this.updateStatus(`✗ Test failed: ${e.message}`, 0); }
-        }
-
-        async testNavigationFunction() {
-            try {
-                this.updateStatus('Testing navigation…', 0);
-                const ok1 = await this.navigateToFirstPage();
-                if (!ok1) { this.updateStatus('✗ First-page navigation failed', 0); return; }
-                this.updateStatus('✓ First page — testing next…', 50);
-                const info = this.getPaginationInfo();
-                if (info.hasNext) { const ok2 = await this.goToNextPage(); this.updateStatus(ok2 ? '✓ Navigation passed' : '✗ Next page failed', ok2 ? 100 : 0); }
-                else this.updateStatus('✓ Navigation passed (single page)', 100);
-            } catch (e) { this.updateStatus(`✗ Navigation failed: ${e.message}`, 0); }
-        }
+        /* ── Test helpers removed — use Start/Pause/Stop/Reset controls ── */
     }
 
     window.slackScraperExtension = new SlackMessageScraper();

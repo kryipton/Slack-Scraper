@@ -32,7 +32,6 @@ document.addEventListener('DOMContentLoaded', function () {
                 function () {
                     if (chrome.runtime.lastError) {
                         setStatus('error', 'Failed to activate');
-                        console.error(chrome.runtime.lastError);
                     } else {
                         setStatus('ready', 'Panel opened!');
                         setTimeout(() => window.close(), 800);
@@ -61,6 +60,6 @@ function activateScraper() {
         const content = ui.querySelector('.scraper-content');
         if (content) content.classList.remove('collapsed');
     } else {
-        console.log('[SlackScraper] Panel not found — ensure the extension is loaded and content script ran.');
+        // Panel not present — content script will have created it on page load
     }
 }
