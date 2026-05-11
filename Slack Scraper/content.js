@@ -524,6 +524,11 @@
            SEARCH MODAL
         ══════════════════════════════════════════ */
         findSearchModal() {
+            // New Slack UI: sidebar search panel (not a dialog)
+            const sidebarSearch = document.querySelector('[data-qa="search_view"]');
+            if (sidebarSearch && !sidebarSearch.hasAttribute('hidden')) return sidebarSearch;
+
+            // Legacy: modal dialog approach
             for (const dialog of document.querySelectorAll('[role="dialog"]')) {
                 if (dialog.hasAttribute('hidden')) continue;
                 if (dialog.getAttribute('aria-label') === 'Huddle') continue;
@@ -534,13 +539,24 @@
 
         findSearchInput(modal = null) {
             if (!modal) modal = this.findSearchModal();
-            if (!modal) return null;
-            for (const sel of [
+
+            // New Slack UI: the search input is a contenteditable in the top nav / sidebar
+            // Try global scope first since new UI puts input in the top bar
+            const globalSelectors = [
                 '[data-qa="focusable_search_input"] .ql-editor[role="combobox"]',
                 '[data-qa="focusable_search_input"] .ql-editor',
+                '[data-qa="top_nav_search"] .ql-editor',
                 '.c-search__input_box .ql-editor',
                 '.ql-editor[role="combobox"]'
-            ]) {
+            ];
+            for (const sel of globalSelectors) {
+                const el = document.querySelector(sel);
+                if (el && el.contentEditable === 'true') return el;
+            }
+
+            if (!modal) return null;
+            // Fallback: search within modal/sidebar container
+            for (const sel of globalSelectors) {
                 const el = modal.querySelector(sel);
                 if (el && el.contentEditable === 'true') return el;
             }
@@ -548,22 +564,32 @@
         }
 
         async openSearchModal() {
-            const existing = this.findSearchModal();
-            if (existing) {
-                document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', keyCode: 27, bubbles: true }));
-                await sleep(600);
+            this.updateStatus('Opening search…', 12);
+
+            // New Slack UI: click the top-nav search bar to open/reset the sidebar search panel
+            const searchBtn = document.querySelector('[data-qa="top_nav_search"]');
+            if (searchBtn) {
+                searchBtn.click();
+                await sleep(800);
+                // Clear any existing query so we start fresh
+                const existingInput = this.findSearchInput();
+                if (existingInput) {
+                    existingInput.innerHTML = '<p><br></p>';
+                    existingInput.dispatchEvent(new Event('input', { bubbles: true }));
+                    await sleep(300);
+                }
+                const modal = this.findSearchModal();
+                if (modal) return modal;
             }
-            this.updateStatus('Opening search modal…', 12);
+
+            // Legacy fallback: Ctrl+K to open the search dialog
             document.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', keyCode: 75, ctrlKey: true, bubbles: true }));
             await sleep(1500);
             let modal = this.findSearchModal();
             if (modal) return modal;
 
-            const searchBtn = document.querySelector('[data-qa="top_nav_search"]');
-            if (searchBtn) { searchBtn.click(); await sleep(1800); modal = this.findSearchModal(); if (modal) return modal; }
-
             try {
-                await waitForElement('[data-qa="focusable_search_input"]', 5000);
+                await waitForElement('[data-qa="focusable_search_input"], [data-qa="search_view"]', 5000);
                 modal = this.findSearchModal();
                 if (modal) return modal;
             } catch (_) { }
@@ -600,14 +626,28 @@
                 if (s.getAttribute('data-replacement')) { s.click(); found = true; this.updateStatus('Selected suggestion…', 65); break; }
             }
             if (!found) {
-                searchInput.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', keyCode: 13, bubbles: true }));
+                // Dispatch Enter on the input itself AND on the document to cover both old and new Slack UI
+                const enterEvent = new KeyboardEvent('keydown', { key: 'Enter', keyCode: 13, bubbles: true, cancelable: true });
+                searchInput.dispatchEvent(enterEvent);
+                // New Slack UI: also try pressing Enter on the focusable search input wrapper
+                const inputWrapper = document.querySelector('[data-qa="focusable_search_input"]');
+                if (inputWrapper) inputWrapper.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', keyCode: 13, bubbles: true, cancelable: true }));
                 this.updateStatus('Submitted search…', 65);
             }
             this.updateStatus('Loading results…', 70);
-            for (let i = 0; i < 12; i++) {
+            // Detect results — new Slack sidebar UI uses role="list" with aria-label containing "Message results"
+            for (let i = 0; i < 16; i++) {
                 await sleep(500);
-                if (document.querySelectorAll('.c-search_message_result, .c-search_result__message, [data-qa="search_result"]').length > 0) break;
-                if (i === 6) searchInput.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', keyCode: 13, bubbles: true }));
+                const hasOldResults = document.querySelectorAll('.c-search_message_result, .c-search_result__message, [data-qa="search_result"]').length > 0;
+                // New UI: message result listitems inside the search view sidebar
+                const hasNewResults = document.querySelectorAll('[data-qa="search_view"] [role="listitem"]').length > 0;
+                if (hasOldResults || hasNewResults) break;
+                // Retry Enter at midpoint
+                if (i === 6) {
+                    searchInput.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', keyCode: 13, bubbles: true, cancelable: true }));
+                    const inputWrapper = document.querySelector('[data-qa="focusable_search_input"]');
+                    if (inputWrapper) inputWrapper.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', keyCode: 13, bubbles: true, cancelable: true }));
+                }
             }
             await sleep(800);
         }
@@ -632,6 +672,10 @@
 
         /* ── Sort ─────────────────────────────────── */
         findSortButton() {
+            // New Slack UI: data-qa="message_sort_toggle-button"
+            const byQa = document.querySelector('[data-qa="message_sort_toggle-button"]');
+            if (byQa) return byQa;
+            // Legacy: any button whose text includes "Sort:"
             return Array.from(document.querySelectorAll('button')).find(b => b.textContent && b.textContent.includes('Sort:'));
         }
 
@@ -776,26 +820,44 @@
         /* ── Extract ──────────────────────────────── */
         extractMessages() {
             const results = [];
-            document.querySelectorAll('.c-search_message_result, .c-search_result__message, [data-qa="search_result"], .c-virtual_list__item, .c-message_kit__message')
-                .forEach((el, idx) => {
+            // New Slack sidebar UI: results are role="listitem" inside the search_view panel
+            // Old UI: .c-search_message_result etc.
+            const selectors = [
+                '[data-qa="search_view"] [role="listitem"]',
+                '.c-search_message_result',
+                '.c-search_result__message',
+                '[data-qa="search_result"]',
+                '.c-virtual_list__item',
+                '.c-message_kit__message'
+            ];
+            const seen = new Set();
+            for (const sel of selectors) {
+                document.querySelectorAll(sel).forEach((el, idx) => {
+                    if (seen.has(el)) return;
+                    seen.add(el);
                     try {
                         const msg = this.parseMessageElement(el);
-                        if (msg && (msg.content || msg.sender)) results.push({ id: idx, ...msg });
+                        if (msg && (msg.content || msg.sender)) results.push({ id: results.length, ...msg });
                     } catch (_) { }
                 });
+            }
             return results;
         }
 
         parseMessageElement(el) {
             const msg = { sender: '', content: '', timestamp: '', channel: '' };
-            const senderEl = el.querySelector('[data-qa="message_sender_name"], .c-message__sender, .c-message_kit__sender_name');
+            // Sender: new UI uses data-qa="message_sender" on a span wrapping a button
+            const senderEl = el.querySelector('[data-qa="message_sender"] button, [data-qa="message_sender_name"], .c-message__sender, .c-message_kit__sender_name, .c-search_message__sender');
             if (senderEl) msg.sender = senderEl.textContent.trim();
-            const channelEl = el.querySelector('[data-qa="search_result_channel_name"] .c-channel_entity__name, .c-inline_channel_entity__name, .c-channel_entity__name');
+            // Channel: new UI uses .c-inline_channel_entity__name or .c-search_message__channel
+            const channelEl = el.querySelector('[data-qa="search_result_channel_name"] .c-channel_entity__name, .c-inline_channel_entity__name, .c-channel_entity__name, .c-search_message__channel');
             if (channelEl) msg.channel = channelEl.textContent.trim();
-            const contentEl = el.querySelector('[data-qa="message-text"], .c-message__message_blocks, .c-search_result__message_body, .c-message_kit__text, .c-message__body');
+            // Content: new UI uses [data-qa="message-text"] .p-rich_text_section
+            const contentEl = el.querySelector('[data-qa="message-text"] .p-rich_text_section, [data-qa="message-text"], .c-message__message_blocks, .c-search_result__message_body, .c-message_kit__text, .c-message__body, .p-rich_text_block');
             if (contentEl) msg.content = contentEl.textContent.replace(/\.\.\./g, '').replace(/Show more/g, '').replace(/\s+/g, ' ').trim();
+            // Timestamp: new UI uses .c-timestamp with data-ts, or aria-label on anchor
             const tsEl = el.querySelector('.c-timestamp, [data-qa="message_timestamp"], .c-message_kit__timestamp, time');
-            if (tsEl) msg.timestamp = tsEl.getAttribute('datetime') || tsEl.getAttribute('title') || tsEl.textContent.trim();
+            if (tsEl) msg.timestamp = tsEl.getAttribute('aria-label') || tsEl.getAttribute('datetime') || tsEl.getAttribute('title') || tsEl.textContent.trim();
             return msg;
         }
 
